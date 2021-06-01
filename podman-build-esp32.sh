@@ -16,4 +16,4 @@ podman run -it --rm -v $SHELL_FOLDER/build:/opt/output ubuntu /bin/bash -c \
 && source /opt/esp-idf/export.sh \
 && make submodules \
 && make \
-&& cp /opt/Play32-micropython/ports/esp32/build-GENERIC_SPIRAM/firmware.bin /opt/output/firmware.bin"
+&& cp /opt/Play32-micropython/ports/esp32/build-PLAY32/firmware.bin /opt/output/firmware.bin"
