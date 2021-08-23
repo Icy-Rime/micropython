@@ -4,6 +4,7 @@
  * The MIT License (MIT)
  *
  * Copyright (c) 2016 Damien P. George
+ * Copyright (c) 2021 Dreagonmon -- add sub frame support and FRAMEBUF_MVMSB format support.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -39,6 +40,7 @@ typedef struct _mp_obj_framebuf_t {
     void *buf;
     uint16_t width, height, stride;
     uint8_t format;
+    uint16_t x, y, w, h; // for sub frame implement.
 } mp_obj_framebuf_t;
 
 #if !MICROPY_ENABLE_DYNRUNTIME
@@ -255,16 +257,22 @@ static inline uint32_t getpixel(const mp_obj_framebuf_t *fb, int x, int y) {
 }
 
 STATIC void fill_rect(const mp_obj_framebuf_t *fb, int x, int y, int w, int h, uint32_t col) {
-    if (h < 1 || w < 1 || x + w <= 0 || y + h <= 0 || y >= fb->height || x >= fb->width) {
+    int xstart = fb->x;
+    int ystart = fb->y;
+    x = x + xstart;
+    y = y + ystart;
+    int xend = xstart + fb->w;
+    int yend = ystart + fb->h;
+    if (h < 1 || w < 1 || x + w <= xstart || y + h <= ystart || y >= yend || x >= xend) {
         // No operation needed.
         return;
     }
 
     // clip to the framebuffer
-    int xend = MIN(fb->width, x + w);
-    int yend = MIN(fb->height, y + h);
-    x = MAX(x, 0);
-    y = MAX(y, 0);
+    xend = MIN(xend, x + w);
+    yend = MIN(yend, y + h);
+    x = MAX(x, xstart);
+    y = MAX(y, ystart);
 
     formats[fb->format].fill_rect(fb, x, y, xend - x, yend - y, col);
 }
@@ -288,6 +296,10 @@ STATIC mp_obj_t framebuf_make_new(const mp_obj_type_t *type, size_t n_args, size
     } else {
         o->stride = o->width;
     }
+    o->x = 0;
+    o->y = 0;
+    o->w = o->width;
+    o->h = o->height;
 
     switch (o->format) {
         case FRAMEBUF_MVLSB:
@@ -325,7 +337,7 @@ STATIC mp_int_t framebuf_get_buffer(mp_obj_t self_in, mp_buffer_info_t *bufinfo,
 STATIC mp_obj_t framebuf_fill(mp_obj_t self_in, mp_obj_t col_in) {
     mp_obj_framebuf_t *self = MP_OBJ_TO_PTR(self_in);
     mp_int_t col = mp_obj_get_int(col_in);
-    formats[self->format].fill_rect(self, 0, 0, self->width, self->height, col);
+    formats[self->format].fill_rect(self, self->x, self->y, self->w, self->h, col);
     return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_2(framebuf_fill_obj, framebuf_fill);
@@ -350,7 +362,13 @@ STATIC mp_obj_t framebuf_pixel(size_t n_args, const mp_obj_t *args) {
     mp_obj_framebuf_t *self = MP_OBJ_TO_PTR(args[0]);
     mp_int_t x = mp_obj_get_int(args[1]);
     mp_int_t y = mp_obj_get_int(args[2]);
-    if (0 <= x && x < self->width && 0 <= y && y < self->height) {
+    int xstart = self->x;
+    int ystart = self->y;
+    x = x + xstart;
+    y = y + ystart;
+    int xend = xstart + self->w;
+    int yend = ystart + self->h;
+    if (xstart <= x && x < xend && ystart <= y && y < yend) {
         if (n_args == 3) {
             // get
             return MP_OBJ_NEW_SMALL_INT(getpixel(self, x, y));
@@ -422,6 +440,15 @@ STATIC mp_obj_t framebuf_line(size_t n_args, const mp_obj_t *args) {
     mp_int_t y2 = mp_obj_get_int(args[4]);
     mp_int_t col = mp_obj_get_int(args[5]);
 
+    int xstart = self->x;
+    int ystart = self->y;
+    x1 = x1 + xstart;
+    y1 = y1 + ystart;
+    x2 = x2 + xstart;
+    y2 = y2 + ystart;
+    int xend = xstart + self->w;
+    int yend = ystart + self->h;
+
     mp_int_t dx = x2 - x1;
     mp_int_t sx;
     if (dx > 0) {
@@ -460,11 +487,11 @@ STATIC mp_obj_t framebuf_line(size_t n_args, const mp_obj_t *args) {
     mp_int_t e = 2 * dy - dx;
     for (mp_int_t i = 0; i < dx; ++i) {
         if (steep) {
-            if (0 <= y1 && y1 < self->width && 0 <= x1 && x1 < self->height) {
+            if (xstart <= y1 && y1 < xend && ystart <= x1 && x1 < yend) {
                 setpixel(self, y1, x1, col);
             }
         } else {
-            if (0 <= x1 && x1 < self->width && 0 <= y1 && y1 < self->height) {
+            if (xstart <= x1 && x1 < xend && ystart <= y1 && y1 < yend) {
                 setpixel(self, x1, y1, col);
             }
         }
@@ -476,7 +503,7 @@ STATIC mp_obj_t framebuf_line(size_t n_args, const mp_obj_t *args) {
         e += 2 * dy;
     }
 
-    if (0 <= x2 && x2 < self->width && 0 <= y2 && y2 < self->height) {
+    if (xstart <= x2 && x2 < xend && ystart <= y2 && y2 < yend) {
         setpixel(self, x2, y2, col);
     }
 
@@ -499,23 +526,32 @@ STATIC mp_obj_t framebuf_blit(size_t n_args, const mp_obj_t *args) {
         key = mp_obj_get_int(args[4]);
     }
 
+    int selfxstart = self->x;
+    int selfystart = self->y;
+    int selfw = self->w;
+    int selfh = self->h;
+    int sourcexstart = source->x;
+    int sourceystart = source->y;
+    int sourcew = source->w;
+    int sourceh = source->h;
+
     if (
-        (x >= self->width) ||
-        (y >= self->height) ||
-        (-x >= source->width) ||
-        (-y >= source->height)
+        (x >= selfw) ||
+        (y >= selfh) ||
+        (-x >= sourcew) ||
+        (-y >= sourceh)
         ) {
         // Out of bounds, no-op.
         return mp_const_none;
     }
 
     // Clip.
-    int x0 = MAX(0, x);
-    int y0 = MAX(0, y);
-    int x1 = MAX(0, -x);
-    int y1 = MAX(0, -y);
-    int x0end = MIN(self->width, x + source->width);
-    int y0end = MIN(self->height, y + source->height);
+    int x0 = MAX(selfxstart, x + selfxstart);
+    int y0 = MAX(selfystart, y + selfystart);
+    int x1 = MAX(sourcexstart, sourcexstart - x);
+    int y1 = MAX(sourceystart, sourceystart - y);
+    int x0end = MIN(selfxstart + selfw, x + selfxstart + sourcew);
+    int y0end = MIN(selfystart + selfh, y + selfystart + sourceh);
 
     for (; y0 < y0end; ++y0) {
         int cx1 = x1;
@@ -536,23 +572,27 @@ STATIC mp_obj_t framebuf_scroll(mp_obj_t self_in, mp_obj_t xstep_in, mp_obj_t ys
     mp_obj_framebuf_t *self = MP_OBJ_TO_PTR(self_in);
     mp_int_t xstep = mp_obj_get_int(xstep_in);
     mp_int_t ystep = mp_obj_get_int(ystep_in);
-    int sx, y, xend, yend, dx, dy;
+    int xstart = self->x;
+    int ystart = self->y;
+    int xend = xstart + self->w;
+    int yend = ystart + self->h;
+    int sx, y, dx, dy;
     if (xstep < 0) {
-        sx = 0;
-        xend = self->width + xstep;
+        sx = xstart;
+        xend = MAX(xstart, xend + xstep);
         dx = 1;
     } else {
-        sx = self->width - 1;
-        xend = xstep - 1;
+        sx = xend - 1;
+        xend = MIN(xend - 1, xstart + xstep - 1);
         dx = -1;
     }
     if (ystep < 0) {
-        y = 0;
-        yend = self->height + ystep;
+        y = ystart;
+        yend = MAX(ystart, yend + ystep);
         dy = 1;
     } else {
-        y = self->height - 1;
-        yend = ystep - 1;
+        y = yend - 1;
+        yend = MIN(yend - 1, ystart + ystep - 1);
         dy = -1;
     }
     for (; y != yend; y += dy) {
@@ -575,6 +615,13 @@ STATIC mp_obj_t framebuf_text(size_t n_args, const mp_obj_t *args) {
         col = mp_obj_get_int(args[4]);
     }
 
+    int xstart = self->x;
+    int ystart = self->y;
+    x0 = x0 + xstart;
+    y0 = y0 + ystart;
+    int xend = xstart + self->w;
+    int yend = ystart + self->h;
+
     // loop over chars
     for (; *str; ++str) {
         // get char and make sure its in range of font
@@ -586,11 +633,11 @@ STATIC mp_obj_t framebuf_text(size_t n_args, const mp_obj_t *args) {
         const uint8_t *chr_data = &font_petme128_8x8[(chr - 32) * 8];
         // loop over char data
         for (int j = 0; j < 8; j++, x0++) {
-            if (0 <= x0 && x0 < self->width) { // clip x
+            if (xstart <= x0 && x0 < xend) { // clip x
                 uint vline_data = chr_data[j]; // each byte is a column of 8 pixels, LSB at top
                 for (int y = y0; vline_data; vline_data >>= 1, y++) { // scan over vertical column
                     if (vline_data & 1) { // only draw if pixel set
-                        if (0 <= y && y < self->height) { // clip y
+                        if (ystart <= y && y < yend) { // clip y
                             setpixel(self, x0, y, col);
                         }
                     }
@@ -601,6 +648,58 @@ STATIC mp_obj_t framebuf_text(size_t n_args, const mp_obj_t *args) {
     return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(framebuf_text_obj, 4, 5, framebuf_text);
+
+STATIC mp_obj_t framebuf_subframe(size_t n_args, const mp_obj_t *args) {
+    (void)n_args;
+    mp_obj_framebuf_t *self = MP_OBJ_TO_PTR(args[0]);
+    mp_int_t x = mp_obj_get_int(args[1]);
+    mp_int_t y = mp_obj_get_int(args[2]);
+    mp_int_t w = mp_obj_get_int(args[3]);
+    mp_int_t h = mp_obj_get_int(args[4]);
+    int xstart = self->x;
+    int ystart = self->y;
+    x = x + xstart;
+    y = y + ystart;
+    int xend = xstart + self->w;
+    int yend = ystart + self->h;
+    if (w < 1 || h < 1 || x < xstart || y < ystart || x + w > xend || y + h > yend) {
+        return mp_const_none;
+    }
+    mp_obj_framebuf_t *o = m_new_obj(mp_obj_framebuf_t);
+    o->base.type = self->base.type;
+    o->buf_obj = self->buf_obj;
+    o->buf = self->buf;
+    o->width = self->width;
+    o->height = self->height;
+    o->stride = self->stride;
+    o->format = self->format;
+    o->x = x;
+    o->y = y;
+    o->w = w;
+    o->h = h;
+    return MP_OBJ_FROM_PTR(o);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(framebuf_subframe_obj, 5, 5, framebuf_subframe);
+
+STATIC mp_obj_t framebuf_get_size(mp_obj_t self_in) {
+    mp_obj_framebuf_t *self = MP_OBJ_TO_PTR(self_in);
+    mp_obj_t val[2] = {mp_obj_new_int_from_uint(self->w), mp_obj_new_int_from_uint(self->h)};
+    mp_obj_t tp = mp_obj_new_tuple(2, val);
+    return tp;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(framebuf_get_size_obj, framebuf_get_size);
+
+STATIC mp_obj_t framebuf_get_format(mp_obj_t self_in) {
+    mp_obj_framebuf_t *self = MP_OBJ_TO_PTR(self_in);
+    return mp_obj_new_int_from_uint(self->format);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(framebuf_get_format_obj, framebuf_get_format);
+
+STATIC mp_obj_t framebuf_get_buffer_fun(mp_obj_t self_in) {
+    mp_obj_framebuf_t *self = MP_OBJ_TO_PTR(self_in);
+    return self->buf_obj;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_1(framebuf_get_buffer_obj, framebuf_get_buffer_fun);
 
 #if !MICROPY_ENABLE_DYNRUNTIME
 STATIC const mp_rom_map_elem_t framebuf_locals_dict_table[] = {
@@ -614,6 +713,10 @@ STATIC const mp_rom_map_elem_t framebuf_locals_dict_table[] = {
     { MP_ROM_QSTR(MP_QSTR_blit), MP_ROM_PTR(&framebuf_blit_obj) },
     { MP_ROM_QSTR(MP_QSTR_scroll), MP_ROM_PTR(&framebuf_scroll_obj) },
     { MP_ROM_QSTR(MP_QSTR_text), MP_ROM_PTR(&framebuf_text_obj) },
+    { MP_ROM_QSTR(MP_QSTR_subframe), MP_ROM_PTR(&framebuf_subframe_obj) },
+    { MP_ROM_QSTR(MP_QSTR_get_size), MP_ROM_PTR(&framebuf_get_size_obj) },
+    { MP_ROM_QSTR(MP_QSTR_get_format), MP_ROM_PTR(&framebuf_get_format_obj) },
+    { MP_ROM_QSTR(MP_QSTR_get_buffer), MP_ROM_PTR(&framebuf_get_buffer_obj) },
 };
 STATIC MP_DEFINE_CONST_DICT(framebuf_locals_dict, framebuf_locals_dict_table);
 
