@@ -45,9 +45,9 @@ typedef struct _mp_obj_framebuf_t {
 STATIC const mp_obj_type_t mp_type_framebuf;
 #endif
 
-typedef void (*setpixel_t)(const mp_obj_framebuf_t *, unsigned int, unsigned int, uint32_t);
-typedef uint32_t (*getpixel_t)(const mp_obj_framebuf_t *, unsigned int, unsigned int);
-typedef void (*fill_rect_t)(const mp_obj_framebuf_t *, unsigned int, unsigned int, unsigned int, unsigned int, uint32_t);
+typedef void (*setpixel_t)(const mp_obj_framebuf_t *, int, int, uint32_t);
+typedef uint32_t (*getpixel_t)(const mp_obj_framebuf_t *, int, int);
+typedef void (*fill_rect_t)(const mp_obj_framebuf_t *, int, int, int, int, uint32_t);
 
 typedef struct _mp_framebuf_p_t {
     setpixel_t setpixel;
@@ -57,6 +57,7 @@ typedef struct _mp_framebuf_p_t {
 
 // constants for formats
 #define FRAMEBUF_MVLSB    (0)
+#define FRAMEBUF_MVMSB    (7)
 #define FRAMEBUF_RGB565   (1)
 #define FRAMEBUF_GS2_HMSB (5)
 #define FRAMEBUF_GS4_HMSB (2)
@@ -66,25 +67,25 @@ typedef struct _mp_framebuf_p_t {
 
 // Functions for MHLSB and MHMSB
 
-STATIC void mono_horiz_setpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, uint32_t col) {
+STATIC void mono_horiz_setpixel(const mp_obj_framebuf_t *fb, int x, int y, uint32_t col) {
     size_t index = (x + y * fb->stride) >> 3;
-    unsigned int offset = fb->format == FRAMEBUF_MHMSB ? x & 0x07 : 7 - (x & 0x07);
+    int offset = fb->format == FRAMEBUF_MHMSB ? x & 0x07 : 7 - (x & 0x07);
     ((uint8_t *)fb->buf)[index] = (((uint8_t *)fb->buf)[index] & ~(0x01 << offset)) | ((col != 0) << offset);
 }
 
-STATIC uint32_t mono_horiz_getpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y) {
+STATIC uint32_t mono_horiz_getpixel(const mp_obj_framebuf_t *fb, int x, int y) {
     size_t index = (x + y * fb->stride) >> 3;
-    unsigned int offset = fb->format == FRAMEBUF_MHMSB ? x & 0x07 : 7 - (x & 0x07);
+    int offset = fb->format == FRAMEBUF_MHMSB ? x & 0x07 : 7 - (x & 0x07);
     return (((uint8_t *)fb->buf)[index] >> (offset)) & 0x01;
 }
 
-STATIC void mono_horiz_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, unsigned int w, unsigned int h, uint32_t col) {
-    unsigned int reverse = fb->format == FRAMEBUF_MHMSB;
-    unsigned int advance = fb->stride >> 3;
+STATIC void mono_horiz_fill_rect(const mp_obj_framebuf_t *fb, int x, int y, int w, int h, uint32_t col) {
+    int reverse = fb->format == FRAMEBUF_MHMSB;
+    int advance = fb->stride >> 3;
     while (w--) {
         uint8_t *b = &((uint8_t *)fb->buf)[(x >> 3) + y * advance];
-        unsigned int offset = reverse ?  x & 7 : 7 - (x & 7);
-        for (unsigned int hh = h; hh; --hh) {
+        int offset = reverse ?  x & 7 : 7 - (x & 7);
+        for (int hh = h; hh; --hh) {
             *b = (*b & ~(0x01 << offset)) | ((col != 0) << offset);
             b += advance;
         }
@@ -92,23 +93,27 @@ STATIC void mono_horiz_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, un
     }
 }
 
-// Functions for MVLSB format
-
-STATIC void mvlsb_setpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, uint32_t col) {
+// Functions for MVLSB and MVMSB
+#define mvlsb_setpixel mono_vert_setpixel
+STATIC void mono_vert_setpixel(const mp_obj_framebuf_t *fb, int x, int y, uint32_t col) {
     size_t index = (y >> 3) * fb->stride + x;
-    uint8_t offset = y & 0x07;
+    uint8_t offset = fb->format == FRAMEBUF_MVLSB ? y & 0x07 : 7 - (y & 0x07);
     ((uint8_t *)fb->buf)[index] = (((uint8_t *)fb->buf)[index] & ~(0x01 << offset)) | ((col != 0) << offset);
 }
 
-STATIC uint32_t mvlsb_getpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y) {
-    return (((uint8_t *)fb->buf)[(y >> 3) * fb->stride + x] >> (y & 0x07)) & 0x01;
+#define mvlsb_getpixel mono_vert_getpixel
+STATIC uint32_t mono_vert_getpixel(const mp_obj_framebuf_t *fb, int x, int y) {
+    size_t index = (y >> 3) * fb->stride + x;
+    uint8_t offset = fb->format == FRAMEBUF_MVLSB ? y & 0x07 : 7 - (y & 0x07);
+    return (((uint8_t *)fb->buf)[index] >> (offset)) & 0x01;
 }
 
-STATIC void mvlsb_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, unsigned int w, unsigned int h, uint32_t col) {
+#define mvlsb_fill_rect mono_vert_fill_rect
+STATIC void mono_vert_fill_rect(const mp_obj_framebuf_t *fb, int x, int y, int w, int h, uint32_t col) {
     while (h--) {
         uint8_t *b = &((uint8_t *)fb->buf)[(y >> 3) * fb->stride + x];
-        uint8_t offset = y & 0x07;
-        for (unsigned int ww = w; ww; --ww) {
+        uint8_t offset = fb->format == FRAMEBUF_MVLSB ? y & 0x07 : 7 - (y & 0x07);
+        for (int ww = w; ww; --ww) {
             *b = (*b & ~(0x01 << offset)) | ((col != 0) << offset);
             ++b;
         }
@@ -118,18 +123,18 @@ STATIC void mvlsb_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, unsigne
 
 // Functions for RGB565 format
 
-STATIC void rgb565_setpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, uint32_t col) {
+STATIC void rgb565_setpixel(const mp_obj_framebuf_t *fb, int x, int y, uint32_t col) {
     ((uint16_t *)fb->buf)[x + y * fb->stride] = col;
 }
 
-STATIC uint32_t rgb565_getpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y) {
+STATIC uint32_t rgb565_getpixel(const mp_obj_framebuf_t *fb, int x, int y) {
     return ((uint16_t *)fb->buf)[x + y * fb->stride];
 }
 
-STATIC void rgb565_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, unsigned int w, unsigned int h, uint32_t col) {
+STATIC void rgb565_fill_rect(const mp_obj_framebuf_t *fb, int x, int y, int w, int h, uint32_t col) {
     uint16_t *b = &((uint16_t *)fb->buf)[x + y * fb->stride];
     while (h--) {
-        for (unsigned int ww = w; ww; --ww) {
+        for (int ww = w; ww; --ww) {
             *b++ = col;
         }
         b += fb->stride - w;
@@ -138,7 +143,7 @@ STATIC void rgb565_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, unsign
 
 // Functions for GS2_HMSB format
 
-STATIC void gs2_hmsb_setpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, uint32_t col) {
+STATIC void gs2_hmsb_setpixel(const mp_obj_framebuf_t *fb, int x, int y, uint32_t col) {
     uint8_t *pixel = &((uint8_t *)fb->buf)[(x + y * fb->stride) >> 2];
     uint8_t shift = (x & 0x3) << 1;
     uint8_t mask = 0x3 << shift;
@@ -146,15 +151,15 @@ STATIC void gs2_hmsb_setpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsig
     *pixel = color | (*pixel & (~mask));
 }
 
-STATIC uint32_t gs2_hmsb_getpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y) {
+STATIC uint32_t gs2_hmsb_getpixel(const mp_obj_framebuf_t *fb, int x, int y) {
     uint8_t pixel = ((uint8_t *)fb->buf)[(x + y * fb->stride) >> 2];
     uint8_t shift = (x & 0x3) << 1;
     return (pixel >> shift) & 0x3;
 }
 
-STATIC void gs2_hmsb_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, unsigned int w, unsigned int h, uint32_t col) {
-    for (unsigned int xx = x; xx < x + w; xx++) {
-        for (unsigned int yy = y; yy < y + h; yy++) {
+STATIC void gs2_hmsb_fill_rect(const mp_obj_framebuf_t *fb, int x, int y, int w, int h, uint32_t col) {
+    for (int xx = x; xx < x + w; xx++) {
+        for (int yy = y; yy < y + h; yy++) {
             gs2_hmsb_setpixel(fb, xx, yy, col);
         }
     }
@@ -162,7 +167,7 @@ STATIC void gs2_hmsb_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, unsi
 
 // Functions for GS4_HMSB format
 
-STATIC void gs4_hmsb_setpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, uint32_t col) {
+STATIC void gs4_hmsb_setpixel(const mp_obj_framebuf_t *fb, int x, int y, uint32_t col) {
     uint8_t *pixel = &((uint8_t *)fb->buf)[(x + y * fb->stride) >> 1];
 
     if (x % 2) {
@@ -172,7 +177,7 @@ STATIC void gs4_hmsb_setpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsig
     }
 }
 
-STATIC uint32_t gs4_hmsb_getpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y) {
+STATIC uint32_t gs4_hmsb_getpixel(const mp_obj_framebuf_t *fb, int x, int y) {
     if (x % 2) {
         return ((uint8_t *)fb->buf)[(x + y * fb->stride) >> 1] & 0x0f;
     }
@@ -180,16 +185,16 @@ STATIC uint32_t gs4_hmsb_getpixel(const mp_obj_framebuf_t *fb, unsigned int x, u
     return ((uint8_t *)fb->buf)[(x + y * fb->stride) >> 1] >> 4;
 }
 
-STATIC void gs4_hmsb_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, unsigned int w, unsigned int h, uint32_t col) {
+STATIC void gs4_hmsb_fill_rect(const mp_obj_framebuf_t *fb, int x, int y, int w, int h, uint32_t col) {
     col &= 0x0f;
     uint8_t *pixel_pair = &((uint8_t *)fb->buf)[(x + y * fb->stride) >> 1];
     uint8_t col_shifted_left = col << 4;
     uint8_t col_pixel_pair = col_shifted_left | col;
-    unsigned int pixel_count_till_next_line = (fb->stride - w) >> 1;
+    int pixel_count_till_next_line = (fb->stride - w) >> 1;
     bool odd_x = (x % 2 == 1);
 
     while (h--) {
-        unsigned int ww = w;
+        int ww = w;
 
         if (odd_x && ww > 0) {
             *pixel_pair = (*pixel_pair & 0xf0) | col;
@@ -213,16 +218,16 @@ STATIC void gs4_hmsb_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, unsi
 
 // Functions for GS8 format
 
-STATIC void gs8_setpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, uint32_t col) {
+STATIC void gs8_setpixel(const mp_obj_framebuf_t *fb, int x, int y, uint32_t col) {
     uint8_t *pixel = &((uint8_t *)fb->buf)[(x + y * fb->stride)];
     *pixel = col & 0xff;
 }
 
-STATIC uint32_t gs8_getpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y) {
+STATIC uint32_t gs8_getpixel(const mp_obj_framebuf_t *fb, int x, int y) {
     return ((uint8_t *)fb->buf)[(x + y * fb->stride)];
 }
 
-STATIC void gs8_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, unsigned int w, unsigned int h, uint32_t col) {
+STATIC void gs8_fill_rect(const mp_obj_framebuf_t *fb, int x, int y, int w, int h, uint32_t col) {
     uint8_t *pixel = &((uint8_t *)fb->buf)[(x + y * fb->stride)];
     while (h--) {
         memset(pixel, col, w);
@@ -231,7 +236,8 @@ STATIC void gs8_fill_rect(const mp_obj_framebuf_t *fb, unsigned int x, unsigned 
 }
 
 STATIC mp_framebuf_p_t formats[] = {
-    [FRAMEBUF_MVLSB] = {mvlsb_setpixel, mvlsb_getpixel, mvlsb_fill_rect},
+    [FRAMEBUF_MVLSB] = {mono_vert_setpixel, mono_vert_getpixel, mono_vert_fill_rect},
+    [FRAMEBUF_MVMSB] = {mono_vert_setpixel, mono_vert_getpixel, mono_vert_fill_rect},
     [FRAMEBUF_RGB565] = {rgb565_setpixel, rgb565_getpixel, rgb565_fill_rect},
     [FRAMEBUF_GS2_HMSB] = {gs2_hmsb_setpixel, gs2_hmsb_getpixel, gs2_hmsb_fill_rect},
     [FRAMEBUF_GS4_HMSB] = {gs4_hmsb_setpixel, gs4_hmsb_getpixel, gs4_hmsb_fill_rect},
@@ -240,11 +246,11 @@ STATIC mp_framebuf_p_t formats[] = {
     [FRAMEBUF_MHMSB] = {mono_horiz_setpixel, mono_horiz_getpixel, mono_horiz_fill_rect},
 };
 
-static inline void setpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y, uint32_t col) {
+static inline void setpixel(const mp_obj_framebuf_t *fb, int x, int y, uint32_t col) {
     formats[fb->format].setpixel(fb, x, y, col);
 }
 
-static inline uint32_t getpixel(const mp_obj_framebuf_t *fb, unsigned int x, unsigned int y) {
+static inline uint32_t getpixel(const mp_obj_framebuf_t *fb, int x, int y) {
     return formats[fb->format].getpixel(fb, x, y);
 }
 
@@ -285,6 +291,7 @@ STATIC mp_obj_t framebuf_make_new(const mp_obj_type_t *type, size_t n_args, size
 
     switch (o->format) {
         case FRAMEBUF_MVLSB:
+        case FRAMEBUF_MVMSB:
         case FRAMEBUF_RGB565:
             break;
         case FRAMEBUF_MHLSB:
@@ -648,6 +655,7 @@ STATIC const mp_rom_map_elem_t framebuf_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_FrameBuffer1), MP_ROM_PTR(&legacy_framebuffer1_obj) },
     { MP_ROM_QSTR(MP_QSTR_MVLSB), MP_ROM_INT(FRAMEBUF_MVLSB) },
     { MP_ROM_QSTR(MP_QSTR_MONO_VLSB), MP_ROM_INT(FRAMEBUF_MVLSB) },
+    { MP_ROM_QSTR(MP_QSTR_MONO_VMSB), MP_ROM_INT(FRAMEBUF_MVMSB) },
     { MP_ROM_QSTR(MP_QSTR_RGB565), MP_ROM_INT(FRAMEBUF_RGB565) },
     { MP_ROM_QSTR(MP_QSTR_GS2_HMSB), MP_ROM_INT(FRAMEBUF_GS2_HMSB) },
     { MP_ROM_QSTR(MP_QSTR_GS4_HMSB), MP_ROM_INT(FRAMEBUF_GS4_HMSB) },
