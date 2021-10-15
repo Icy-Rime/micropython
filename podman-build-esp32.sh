@@ -6,7 +6,7 @@ podman run -it --rm -v $SHELL_FOLDER/build:/opt/output ubuntu /bin/bash -c \
 && cd /opt \
 && apt update \
 && apt install git wget nano python3 python-is-python3 python3-pip build-essential cmake libusb-1.0-0 -y \
-&& git clone -b v4.2 https://github.com/espressif/esp-idf.git --recursive \
+&& git clone -b v4.0.2 https://github.com/espressif/esp-idf.git --recursive \
 && bash esp-idf/install.sh \
 && git clone https://github.com/Icy-Rime/Play32-micropython.git \
 && cd Play32-micropython \
@@ -15,5 +15,5 @@ podman run -it --rm -v $SHELL_FOLDER/build:/opt/output ubuntu /bin/bash -c \
 && cd ports/esp32/ \
 && source /opt/esp-idf/export.sh \
 && make submodules \
-&& make \
+&& make BOARD=PLAY32 \
 && cp /opt/Play32-micropython/ports/esp32/build-PLAY32/firmware.bin /opt/output/firmware.bin"
